@@ -12,14 +12,14 @@ from imapclient import IMAPClient
 from dotenv import load_dotenv
 
 
-class SettingExceptions(Exception):
-    """Indicates that there is some problem with setting json file."""
+class SettingsExceptions(Exception):
+    """Indicates that there is some problem with settings json file."""
     pass
 
 
 @dataclass(frozen=True)
 class SettingFromJsonFileEmail:
-    """Stores setting for Email Operations."""
+    """Stores settings for Email Operations."""
     host: str
     username: str
     password: str
@@ -28,34 +28,34 @@ class SettingFromJsonFileEmail:
 
 @dataclass(frozen=True)
 class SettingsFromJsonFileTgBot:
-    """Stores setting for Telegram Bot Operations."""
+    """Stores settings for Telegram Bot Operations."""
     tgbot_token: str
     tgbot_chat_id: str
 
 
-def get_env_variables() -> Tuple[float, str]:
+@dataclass(frozen=True)
+class SettingsFromJsonFileGeneral:
+    """Stores general settings for the app."""
+    repeat_timeout: int
+
+
+def get_env_variables() -> str:
     """Get environment settings."""
 
     load_dotenv()  # read .env file
 
-    try:
-        repeat_timeout = float(os.getenv("REPEAT_TIMEOUT", 15))  # repeat our program main function every N seconds
-    except TypeError as ex:
-        logging.error("TIMEOUT should be float of integer!")
-        raise ex
+    json_settings_filename = os.getenv("JSON_SETTINGS_FILENAME", "configs/.secret.json")
 
-    json_settings_filename = os.getenv("JSON_SETTINGS_FILENAME", ".secret.json")
-
-    return repeat_timeout, json_settings_filename
+    return json_settings_filename
 
 
 def get_settings_from_json_file(
         filename: Optional[str] = None,
         encoding: Optional[str] = None,
-) -> Tuple[SettingFromJsonFileEmail, SettingsFromJsonFileTgBot]:
+) -> Tuple[SettingFromJsonFileEmail, SettingsFromJsonFileTgBot, SettingsFromJsonFileGeneral]:
     """Reads settings from json settings file. File should have correct structure."""
     if filename is None:
-        filename = ".secret.json"
+        filename = "configs/.secret.json"
 
     if encoding is None:
         encoding = "UTF8"
@@ -65,11 +65,15 @@ def get_settings_from_json_file(
 
         mail_settings_storage = data.get("mail", None)
         if mail_settings_storage is None:
-            raise SettingExceptions("No mail settings in file")
+            raise SettingsExceptions("No mail settings in file")
 
         bot_settings_storage = data.get("bot", None)
         if bot_settings_storage is None:
-            raise SettingExceptions("No bot settings in file")
+            raise SettingsExceptions("No bot settings in file")
+
+        general_settings_storage = data.get("general", None)
+        if general_settings_storage is None:
+            raise SettingsExceptions("No general settings in file")
 
         email_settings = SettingFromJsonFileEmail(
             host=mail_settings_storage.get("host", ""),
@@ -83,7 +87,11 @@ def get_settings_from_json_file(
             tgbot_chat_id=bot_settings_storage.get("chat_id", ""),
         )
 
-        return email_settings, bot_settings
+        general_settings = SettingsFromJsonFileGeneral(
+            repeat_timeout=general_settings_storage.get("repeat_timeout", 30),
+        )
+
+        return email_settings, bot_settings, general_settings
 
 
 def process_messages_from_one_sender(
@@ -113,6 +121,7 @@ def process_messages_from_one_sender(
                     body = part.get_payload(decode=True).decode("utf-8")
                     break
             else:
+                # TODO: work with other content types
                 body = "No text/plain was found in multipart email!"
                 logging.warning("No text/plain was found in multipart email!")
         else:
@@ -132,11 +141,14 @@ def process_messages_from_one_sender(
 
 
 def main() -> None:
-    repeat_timeout, filename = get_env_variables()
-    email_settings, bot_settings = get_settings_from_json_file(filename=filename, encoding="utf8")
+    filename = get_env_variables()
+    email_settings, bot_settings, general_settings = get_settings_from_json_file(filename=filename, encoding="utf8")
     bot = telebot.TeleBot(bot_settings.tgbot_token)
 
+    logging.info(f"Application repeat_timeout={general_settings.repeat_timeout}. Configs source: {filename}")
+
     while True:
+        cycle_start_time = time.monotonic()
         server = IMAPClient(email_settings.host)
         server.login(email_settings.username, email_settings.password)
         logging.info("Successfully logged in email server")
@@ -155,7 +167,9 @@ def main() -> None:
             server.logout()
             logging.info("Successfully logged out from email server")
 
-        time.sleep(repeat_timeout)
+        logging.info(f"Time to finish application cycle: {time.monotonic() - cycle_start_time}")
+
+        time.sleep(general_settings.repeat_timeout)
 
 
 if __name__ == '__main__':

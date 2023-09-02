@@ -1,4 +1,5 @@
 .venv/
 .vscode/
-.secret.json
 .env
+configs/
+!.configs/.secret.json.sample
